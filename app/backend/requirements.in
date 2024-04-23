@@ -28,3 +28,5 @@ PyMuPDF
 beautifulsoup4
 types-beautifulsoup4
 msgraph-sdk==1.1.0
+llama-index
+llama-index-llms-azure-openai
