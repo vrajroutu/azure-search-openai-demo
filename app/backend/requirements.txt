@@ -442,6 +442,8 @@ yarl==1.9.4
     # via aiohttp
 zipp==3.17.0
     # via importlib-metadata
+llama-index==0.10.30
+llama-index-llms-azure-openai==0.1.6
 
 # The following packages are considered to be unsafe in a requirements file:
 # setuptools
