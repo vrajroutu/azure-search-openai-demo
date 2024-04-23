@@ -13,6 +13,25 @@ from approaches.approach import ThoughtStep
 from approaches.chatapproach import ChatApproach
 from core.authentication import AuthenticationHelper
 from core.modelhelper import get_token_limit
+from llama_index.core import PromptTemplate
+from llama_index.llms.azure_openai import AzureOpenAI
+import asyncio  
+from concurrent.futures import ThreadPoolExecutor  
+  
+executor = ThreadPoolExecutor()  
+
+AZURE_OPENAI_SERVICE = os.getenv("AZURE_OPENAI_SERVICE")
+aoai_api_key = os.getenv('AZURE_OPENAI_SERVICE_KEY') 
+aoai_endpoint =f"https://{AZURE_OPENAI_SERVICE}.openai.azure.com"
+aoai_api_version = "2023-05-15"
+
+llm = AzureOpenAI(
+    model="gpt-4-1106-preview",
+    deployment_name="chat",
+    api_key=aoai_api_key,
+    azure_endpoint=aoai_endpoint,
+    api_version=aoai_api_version,
+)
 
 
 class ChatReadRetrieveReadApproach(ChatApproach):
@@ -98,7 +117,18 @@ class ChatReadRetrieveReadApproach(ChatApproach):
         use_semantic_ranker = True if overrides.get("semantic_ranker") and has_text else False
 
         original_user_query = history[-1]["content"]
-        user_query_request = "Generate search query for: " + original_user_query
+        rewritten_queries = await self.rewrite_query(original_user_query)
+        if not rewritten_queries:  
+            raise ValueError("No rewritten queries generated.")  
+        optimized_query = rewritten_queries[0]  
+        query_messages = self.get_messages_from_history(
+            system_prompt=self.query_prompt_template,
+            model_id=self.chatgpt_model,
+            history=history,
+            user_content=optimized_query,
+            max_tokens=self.chatgpt_token_limit - len(optimized_query),
+            few_shots=self.query_prompt_few_shots,
+        )
 
         tools: List[ChatCompletionToolParam] = [
             {
@@ -109,12 +139,12 @@ class ChatReadRetrieveReadApproach(ChatApproach):
                     "parameters": {
                         "type": "object",
                         "properties": {
-                            "search_query": {
+                            "optimized_query": {
                                 "type": "string",
                                 "description": "Query string to retrieve documents from azure search eg: 'Health care plan'",
                             }
                         },
-                        "required": ["search_query"],
+                        "required": ["optimized_query"],
                     },
                 },
             }
@@ -141,22 +171,21 @@ class ChatReadRetrieveReadApproach(ChatApproach):
             tool_choice="auto",
         )
 
-        query_text = self.get_search_query(chat_completion, original_user_query)
 
         # STEP 2: Retrieve relevant documents from the search index with the GPT optimized query
 
         # If retrieval mode includes vectors, compute an embedding for the query
         vectors: list[VectorQuery] = []
         if has_vector:
-            vectors.append(await self.compute_text_embedding(query_text))
+            vectors.append(await self.compute_text_embedding(optimized_query))
 
         # Only keep the text query if the retrieval mode uses text, otherwise drop it
         if not has_text:
-            query_text = None
+            optimized_query = None
 
         results = await self.search(
             top,
-            query_text,
+            optimized_query,
             filter,
             vectors,
             use_semantic_ranker,
@@ -203,7 +232,7 @@ class ChatReadRetrieveReadApproach(ChatApproach):
                 ),
                 ThoughtStep(
                     "Search using generated search query",
-                    query_text,
+                    optimized_query,
                     {
                         "use_semantic_captions": use_semantic_captions,
                         "use_semantic_ranker": use_semantic_ranker,
